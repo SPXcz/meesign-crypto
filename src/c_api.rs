@@ -11,6 +11,8 @@ use crate::protocol::elgamal;
 use crate::protocol::frost;
 #[cfg(feature = "gg18")]
 use crate::protocol::gg18;
+#[cfg(feature = "musig2meesign")]
+use crate::protocol::musig2meesign;
 #[cfg(feature = "protocol")]
 use crate::protocol::{self, KeygenProtocol, ThresholdProtocol};
 
@@ -20,6 +22,7 @@ pub enum ProtocolId {
     Gg18,
     Elgamal,
     Frost,
+    Musig2
 }
 
 #[repr(C)]
