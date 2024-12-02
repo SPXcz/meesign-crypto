@@ -26,7 +26,7 @@ x509-cert = { version = "0.2.5", features = ["builder"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 # https://github.com/RustCrypto/elliptic-curves/discussions/1005
 sha2 = { version = "0.10.7", features = ["oid"] }
-musig2 = { git = "https://github.com/SPXcz/musig2.git", optional = true, features = ["serde"] }
+musig2 = { git = "https://github.com/SPXcz/musig2.git" , optional = true, features = ["serde"] }
 
 [build-dependencies]
 cbindgen = "0.20.0"
