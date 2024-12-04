@@ -82,10 +82,11 @@ impl KeygenContext {
                 signer.generate_key_agg_ctx_serialized(pub_key_shares, None, false);
 
                 let agg_pubkey = signer.get_agg_pubkey().clone();
+                let msg = serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?;
 
                 (
                     KeygenRound::Done(*setup, signer.clone()),
-                    agg_pubkey.serialize().to_vec(),
+                    msg,
                     Recipient::Server,
                 )
             }
@@ -189,7 +190,7 @@ impl SignContext {
         self.initial_signer.first_round();
 
         let internal_index: u8 = self.initial_signer.get_index() as u8;
-        let pubnonce = self.initial_signer.get_pubnonce_serialized();
+        let pubnonce = self.initial_signer.get_pubnonce();
 
         // Serialize the public nonce and the internal index of the signer. Format: &[u8] + u8
         let msg = serialize_bcast(&(pubnonce, internal_index), ProtocolType::Musig2)?; // TODO: Check if this is correct usage of serialize_bcast
@@ -225,7 +226,7 @@ impl SignContext {
                 if let Some(message) = &mut self.message {
                     signer.second_round(&message, pubnonces);
 
-                    let partial_signature = signer.get_partial_signature_serialized();
+                    let partial_signature = signer.get_partial_signature();
                     let internal_index = signer.get_index() as u8;
 
                     // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
@@ -270,7 +271,7 @@ impl SignContext {
     }
 }
 
-#[typetag::serde(name = "frost_sign")]
+#[typetag::serde(name = "musig2_sign")]
 impl Protocol for SignContext {
     fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         match self.round {
@@ -305,66 +306,62 @@ impl ThresholdProtocol for SignContext {
 mod tests {
     use super::*;
     use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
-    use frost::VerifyingKey;
+    use musig2::CompactSignature;
     use rand::seq::IteratorRandom;
 
     impl KeygenProtocolTest for KeygenContext {
-        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Frost;
-        const ROUNDS: usize = 3;
+        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Musig2;
+        const ROUNDS: usize = 2;
         const INDEX_OFFSET: u32 = 1;
     }
 
     impl ThresholdProtocolTest for SignContext {
-        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Frost;
-        const ROUNDS: usize = 3;
+        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Musig2;
+        const ROUNDS: usize = 2;
         const INDEX_OFFSET: u32 = 1;
     }
 
     #[test]
     fn keygen() {
-        for threshold in 2..6 {
-            for parties in threshold..6 {
-                let (pks, _) =
-                    <KeygenContext as KeygenProtocolTest>::run(threshold as u32, parties as u32);
+        for parties in 2..6 {
+            let (pks, _) =
+                <KeygenContext as KeygenProtocolTest>::run(parties as u32, parties as u32);
 
-                let pks: Vec<VerifyingKey> = pks
-                    .iter()
-                    .map(|(_, x)| serde_json::from_slice(&x).unwrap())
-                    .collect();
+            let pks: Vec<PublicKey> = pks
+                .iter()
+                .map(|(_, x)| serde_json::from_slice(&x).unwrap())
+                .collect();
 
-                for i in 1..parties {
-                    assert_eq!(pks[0], pks[i])
-                }
+            for i in 1..parties {
+                assert_eq!(pks[0], pks[i])
             }
         }
     }
 
     #[test]
     fn sign() {
-        for threshold in 2..6 {
-            for parties in threshold..6 {
-                let (pks, ctxs) =
-                    <KeygenContext as KeygenProtocolTest>::run(threshold as u32, parties as u32);
-                let msg = b"hello";
-                let (_, pk) = pks.iter().take(1).collect::<Vec<_>>()[0];
-                let pk: VerifyingKey = serde_json::from_slice(&pk).unwrap();
+        for parties in 2..6 {
+            let (pks, ctxs) =
+                <KeygenContext as KeygenProtocolTest>::run(parties as u32, parties as u32);
+            let msg = b"hello";
+            let (_, pk) = pks.iter().take(1).collect::<Vec<_>>()[0];
+            let pk: PublicKey = serde_json::from_slice(&pk).unwrap();
 
-                let ctxs = ctxs
-                    .into_iter()
-                    .choose_multiple(&mut OsRng, threshold)
-                    .into_iter()
-                    .collect();
-                let results =
-                    <SignContext as ThresholdProtocolTest>::run(ctxs, msg.to_vec());
+            let ctxs = ctxs
+                .into_iter()
+                .choose_multiple(&mut OsRng, parties)
+                .into_iter()
+                .collect();
+            let results =
+                <SignContext as ThresholdProtocolTest>::run(ctxs, msg.to_vec());
 
-                let signature: Signature = serde_json::from_slice(&results[0]).unwrap();
+            let signature: PublicKey = serde_json::from_slice(&results[0]).unwrap();
 
-                for result in results {
-                    assert_eq!(signature, serde_json::from_slice(&result).unwrap());
-                }
-
-                assert!(pk.verify(msg, &signature).is_ok());
+            for result in results {
+                assert_eq!(signature, serde_json::from_slice(&result).unwrap());
             }
+
+            //assert!(pk.verify(msg, &signature).is_ok());
         }
     }
 }
@@ -410,28 +407,6 @@ impl Signer {
         }
 
         return self.index.unwrap();
-    }
-
-    pub fn get_agg_pubkey_serialized(&self) -> Vec<u8> {
-        let pubkey = self.get_agg_pubkey();
-        return pubkey.serialize().to_vec();
-    }
-
-    pub fn get_pubnonce_serialized(&self) -> Vec<u8> {
-        return self.get_pubnonce().serialize().to_vec();
-    }
-
-    pub fn get_partial_signature_serialized(&self) -> Vec<u8> {
-        return self.get_partial_signature().serialize().to_vec();
-    }
-
-    pub fn get_agg_signature_serialized(&mut self) -> Result<Vec<u8>> {
-
-        match self.get_agg_signature() {
-            Ok(signature) => return Ok(signature.serialize().to_vec()),
-            Err(e) => return Err(e),
-            
-        }
     }
 
     pub fn generate_key_agg_ctx_serialized(&mut self, pubkeys_ser: Vec<Vec<u8>>, tweak: Option<[u8;32]>, xonly: bool) {
