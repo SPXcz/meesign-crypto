@@ -262,3 +262,61 @@ impl ThresholdProtocol for SignContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+    use rand::{rngs::OsRng, seq::IteratorRandom};
+    use sha2::Digest;
+    use super::*;
+    use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
+    impl KeygenProtocolTest for KeygenContext {
+        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Gg18;
+        const ROUNDS: usize = 6;
+    }
+    impl ThresholdProtocolTest for SignContext {
+        const PROTOCOL_TYPE: ProtocolType = ProtocolType::Gg18;
+        const ROUNDS: usize = 10;
+    }
+    #[test]
+    fn keygen() {
+        for threshold in 2..6 {
+            for parties in threshold..6 {
+                let (pks, _) =
+                    <KeygenContext as KeygenProtocolTest>::run(threshold as u32, parties as u32);
+                let pks: Vec<_> = pks.into_values().collect();
+                for i in 1..parties {
+                    assert_eq!(pks[0], pks[i])
+                }
+            }
+        }
+    }
+    #[test]
+    fn sign() {
+        for threshold in 2..6 {
+            for parties in threshold..6 {
+                let (pks, ctxs) =
+                    <KeygenContext as KeygenProtocolTest>::run(threshold as u32, parties as u32);
+                let msg = b"hello";
+                let dgst = sha2::Sha256::digest(msg);
+                let pks: Vec<_> = pks.into_values().collect();
+                let pk = VerifyingKey::from_sec1_bytes(&pks[0]).unwrap();
+                let ctxs = ctxs
+                    .into_iter()
+                    .choose_multiple(&mut OsRng, threshold)
+                    .into_iter()
+                    .collect();
+                let results =
+                    <SignContext as ThresholdProtocolTest>::run(ctxs, dgst.to_vec());
+                let signature = results[0].clone();
+                for result in results {
+                    assert_eq!(&signature, &result);
+                }
+                let mut buffer = [0u8; 64];
+                buffer.copy_from_slice(&signature);
+                let signature = Signature::from_bytes(&buffer.into()).unwrap();
+                assert!(pk.verify(msg, &signature).is_ok());
+            }
+        }
+    }
+}

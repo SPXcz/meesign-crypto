@@ -159,7 +159,7 @@ pub(crate) struct SignContext {
     round: SignRound,
 }
 
-const POINT_CHUNK_LEN: usize = 34; //(33+1)
+const PUBNONCE_CHUNK_LEN: usize = 67; //(33*2+1)
 const SCALAR_CHUNK_LEN: usize = 33; //(32+1)
 
 #[derive(Serialize, Deserialize)]
@@ -189,11 +189,13 @@ impl SignContext {
         // Generate secnonce and pubnonce
         self.initial_signer.first_round();
 
+        let mut out_buffer = self.initial_signer.get_pubnonce_serialized().clone();
         let internal_index: u8 = self.initial_signer.get_index() as u8;
-        let pubnonce = self.initial_signer.get_pubnonce();
+
+        out_buffer.push(internal_index);
 
         // Serialize the public nonce and the internal index of the signer. Format: &[u8] + u8
-        let msg = serialize_bcast(&(pubnonce, internal_index), ProtocolType::Musig2)?; // TODO: Check if this is correct usage of serialize_bcast
+        let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?; // TODO: Check if this is correct usage of serialize_bcast
 
         // TODO: Can I somehow just pass a reference instead of cloning? (Due to Signer having a secret share inside)
         self.round = SignRound::R1(self.initial_signer.clone());
@@ -210,7 +212,7 @@ impl SignContext {
 
                 // TODO: Is the pubnonce instance of this Signer object returned by the server?
                 // Generate hashmap <internal index of Signer, pubnonce>
-                let pubnonces = deserialize_musig(pubnonce_hashmap.values().cloned().collect(), POINT_CHUNK_LEN)?;
+                let pubnonces = deserialize_musig(pubnonce_hashmap.values().cloned().collect(), PUBNONCE_CHUNK_LEN)?;
 
                 // Create a vector of tuples (internal index of Signer, pubnonce)
                 let pubnonces: Vec<(usize, Vec<u8>)> = pubnonces
@@ -226,11 +228,13 @@ impl SignContext {
                 if let Some(message) = &mut self.message {
                     signer.second_round(&message, pubnonces);
 
-                    let partial_signature = signer.get_partial_signature();
+                    let mut out_buffer = signer.get_partial_signature_serialized().clone();
                     let internal_index = signer.get_index() as u8;
 
+                    out_buffer.push(internal_index);
+
                     // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
-                    let msg = serialize_bcast(&(partial_signature, internal_index), ProtocolType::Musig2)?;
+                    let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
 
                     self.round = SignRound::R2(signer);
                     
@@ -317,7 +321,7 @@ mod tests {
 
     impl ThresholdProtocolTest for SignContext {
         const PROTOCOL_TYPE: ProtocolType = ProtocolType::Musig2;
-        const ROUNDS: usize = 2;
+        const ROUNDS: usize = 3;
         const INDEX_OFFSET: u32 = 1;
     }
 
@@ -349,19 +353,19 @@ mod tests {
 
             let ctxs = ctxs
                 .into_iter()
-                .choose_multiple(&mut OsRng, parties)
-                .into_iter()
+            //    .choose_multiple(&mut OsRng, parties)
+            //    .into_iter()
                 .collect();
             let results =
                 <SignContext as ThresholdProtocolTest>::run(ctxs, msg.to_vec());
 
-            let signature: PublicKey = serde_json::from_slice(&results[0]).unwrap();
+            let signature: CompactSignature = serde_json::from_slice(&results[0]).unwrap();
 
             for result in results {
                 assert_eq!(signature, serde_json::from_slice(&result).unwrap());
             }
 
-            //assert!(pk.verify(msg, &signature).is_ok());
+            assert!(musig2::verify_single(pk, signature, msg).is_ok());
         }
     }
 }
@@ -409,6 +413,14 @@ impl Signer {
         return self.index.unwrap();
     }
 
+    pub fn get_partial_signature_serialized(&self) -> Vec<u8> {
+        return self.get_partial_signature().serialize().to_vec();
+    }
+
+    pub fn get_pubnonce_serialized(&self) -> Vec<u8> {
+        return self.get_pubnonce().serialize().to_vec();
+    }
+
     pub fn generate_key_agg_ctx_serialized(&mut self, pubkeys_ser: Vec<Vec<u8>>, tweak: Option<[u8;32]>, xonly: bool) {
 
         let mut pubkeys: Vec<PublicKey> = Vec::new();
@@ -454,7 +466,7 @@ impl Signer {
         // Get public key shares sorted in lexigraphical order (BIP0327)
         let mut pubkeys: Vec<PublicKey> = all_pubkeys.clone();
         pubkeys.push(self.pubkey());
-        let sorted_pubkeys:Vec<PublicKey>  = self.sort_pubkeys(pubkeys);
+        let sorted_pubkeys: Vec<PublicKey>  = self.sort_pubkeys(pubkeys);
 
         // Set index of this signer in the sorted public keys
         self.set_index(sorted_pubkeys.clone());
@@ -501,7 +513,7 @@ impl Signer {
             self.key_agg_ctx.clone().unwrap(),
             // TODO: I can't see any problem here
             nonce_seed,
-            self.index.unwrap(),
+            self.get_index(),
             musig2::SecNonceSpices::new()
                 .with_seckey(seckey)
         )
@@ -624,5 +636,7 @@ impl Signer {
         if index == None {
             panic!("Public key not found in the list of public keys");
         }
+
+        self.index = index;
     }
 }
