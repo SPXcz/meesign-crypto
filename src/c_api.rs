@@ -22,7 +22,7 @@ pub enum ProtocolId {
     Gg18,
     Elgamal,
     Frost,
-    Musig2
+    Musig2,
 }
 
 #[repr(C)]
@@ -137,7 +137,7 @@ pub unsafe extern "C" fn protocol_keygen(
             (ProtocolId::Frost, true) => Box::new(frost::KeygenContext::with_card()),
             #[cfg(feature = "musig2")]
             (ProtocolId::Musig2, false) => Box::new(musig2::KeygenContext::new()),
-            #[cfg(feature = "frost")]
+            #[cfg(feature = "musig2")]
             (ProtocolId::Musig2, true) => Box::new(musig2::KeygenContext::with_card()),
             _ => panic!("Protocol not supported"),
         }
